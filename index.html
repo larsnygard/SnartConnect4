@@ -67,6 +67,9 @@ h1 {
 }
 .mode-select button.active { background: linear-gradient(135deg, #0ea5e9, #6366f1); color: #fff; font-weight: 700; }
 .mode-select[hidden] { display: none !important; }
+.switches { display: flex; flex-direction: column; gap: 6px; align-items: center; margin: 2px 0 4px; }
+.switch-row { display: flex; gap: 10px; align-items: center; }
+.switch-label { color: #94a3b8; font-size: 0.85rem; font-weight: 600; min-width: 72px; text-align: right; }
 
 .scores {
   display: flex; gap: 14px; align-items: center; justify-content: center;
@@ -113,13 +116,24 @@ footer { color: #64748b; font-size: 0.8rem; margin-top: 4px; padding-bottom: 18p
 </header>
 
 <div class="topbar">
-  <div class="mode-select" id="modeSelect">
-    <button data-mode="pvp" class="active">2 Players</button>
-    <button data-mode="cpu">vs CPU</button>
-    <button data-mode="points">Points</button>
+  <button id="newGameBtn" class="btn primary">↻ New game</button>
+  <button id="soundBtn" class="btn" title="Sound on/off">🔊</button>
+</div>
+<div class="switches">
+  <div class="switch-row">
+    <span class="switch-label">Opponent</span>
+    <div class="mode-select" id="oppSelect">
+      <button data-opp="pvp" class="active">2 Players</button>
+      <button data-opp="cpu">CPU</button>
+    </div>
   </div>
-  <button class="btn" id="soundBtn" title="Sound on/off">🔊 Sound: On</button>
-  <button class="btn primary" id="newGameBtn">New Game</button>
+  <div class="switch-row">
+    <span class="switch-label">Rules</span>
+    <div class="mode-select" id="rulesSelect">
+      <button data-rules="classic" class="active">Regular</button>
+      <button data-rules="points">Points</button>
+    </div>
+  </div>
 </div>
 
 <div class="topbar" id="starterBar" hidden>
@@ -222,7 +236,8 @@ const Sound = (() => {
 const state = {
   board: [],       // board[row][col] = 0 empty, 1 p1 (yellow), 2 p2 (red). row 0 = BOTTOM.
   turn: 1,
-  mode: 'pvp',     // 'pvp' | 'cpu' | 'points'
+  opp: 'pvp',      // 'pvp' | 'cpu'   (switch 1)
+  rules: 'classic', // 'classic' | 'points' (switch 2)
   starter: 'player', // cpu mode only: who moves first ('player' | 'cpu')
   cpuColor: 2,    // CPU always plays red
   over: false,
@@ -242,7 +257,7 @@ function emptyBoard() { return Array.from({length: ROWS}, () => Array(COLS).fill
 
 function resetGame() {
   state.board = emptyBoard();
-  state.turn = (state.mode === 'cpu' && state.starter === 'cpu') ? state.cpuColor : 1;
+  state.turn = (state.opp === 'cpu' && state.starter === 'cpu') ? state.cpuColor : 1;
   state.over = false;
   state.winLine = null;
   state.animating = false;
@@ -477,14 +492,13 @@ const colorName = p => p === 1 ? 'Yellow' : 'Red';
 
 function updateStatus() {
   let txt;
-  if (state.mode === 'points') {
+  if (state.rules === 'points') {
     if (state.over) {
       const wl = state.winLine;
-      if (wl && wl.type === 'win') txt = `${colorName(wl.color)} wins!`;
-      else txt = 'Game over';
+      txt = wl ? `${colorName(wl.color)} wins!` : 'Game over';
     } else {
       txt = `${colorName(state.turn)} to move`;
-      if (state.mode === 'cpu' && state.turn === state.cpuColor) txt += ' — CPU thinking…';
+      if (state.opp === 'cpu' && state.turn === state.cpuColor) txt += ' — CPU thinking…';
     }
   } else {
     if (state.over) {
@@ -496,7 +510,7 @@ function updateStatus() {
         : `${colorName(wl.color)} wins!`;
     } else {
       txt = `${colorName(state.turn)} to move`;
-      if (state.mode === 'cpu' && state.turn === state.cpuColor) txt += ' — CPU thinking…';
+      if (state.opp === 'cpu' && state.turn === state.cpuColor) txt += ' — CPU thinking…';
     }
   }
   statusEl.innerHTML =
@@ -519,7 +533,7 @@ function showOverlay(title, sub) {
 
 function dropPiece(col, byHuman) {
   if (state.over || state.animating) return;
-  if (byHuman && state.mode === 'cpu' && state.turn === state.cpuColor) return;
+  if (byHuman && state.opp === 'cpu' && state.turn === state.cpuColor) return;
   const player = state.turn;
   state.animating = true;
   state.hoverCol = -1;
@@ -544,7 +558,7 @@ function dropPiece(col, byHuman) {
 
 function afterDrop(player) {
   state.animating = false;
-  if (state.mode === 'points') { afterDropPoints(player); return; }
+  if (state.rules === 'points') { afterDropPoints(player); return; }
   const res = evaluateAfterMove(state.board);
   render();
 
@@ -585,30 +599,30 @@ function afterDrop(player) {
 // both players can pass the target the same turn — then the higher
 // score wins, and if it's equal the game continues.
 // ------------------------------------------------------------------
-function scoreNewLines() {
+function scoreNewLines(st) {
   const gained = { 1: 0, 2: 0 };
   let highlight = null;
   for (const color of [1, 2]) {
-    const runs = allRuns(state.board).filter(x => x.v === color && x.len >= 4);
+    const runs = allRuns(st.board).filter(x => x.v === color && x.len >= 4);
     for (const run of runs) {
       const keySet = new Set(run.cells.map(([r, c]) => r + ',' + c));
       let prevLen = 0, prevIdx = -1;
-      state.scoredLines[color].forEach((p, i) => {
+      st.scoredLines[color].forEach((p, i) => {
         if (p.len > prevLen && p.cells.every(([r, c]) => keySet.has(r + ',' + c))) {
           prevLen = p.len; prevIdx = i;
         }
       });
       const delta = pointsForLen(run.len) - pointsForLen(prevLen);
       if (delta <= 0) continue;
-      if (prevIdx >= 0) state.scoredLines[color].splice(prevIdx, 1);
-      state.scoredLines[color].push({ cells: run.cells, len: run.len });
+      if (prevIdx >= 0) st.scoredLines[color].splice(prevIdx, 1);
+      st.scoredLines[color].push({ cells: run.cells, len: run.len });
       gained[color] += delta;
       if (!highlight || delta > highlight.delta)
         highlight = { color, cells: run.cells, len: run.len, delta };
     }
   }
-  state.scores[1] += gained[1];
-  state.scores[2] += gained[2];
+  st.scores[1] += gained[1];
+  st.scores[2] += gained[2];
   return { gained, highlight };
 }
 
@@ -621,7 +635,7 @@ function checkPointsWin() {
 }
 
 function afterDropPoints(player) {
-  const { gained, highlight } = scoreNewLines();
+  const { gained, highlight } = scoreNewLines(state);
   state.winLine = highlight
     ? { type: 'score', color: highlight.color, cells: highlight.cells }
     : null;
@@ -776,6 +790,7 @@ function minimax(board, depth, alpha, beta, maximizing, cpu) {
 }
 
 function cpuBestMove() {
+  if (state.rules === 'points') return cpuBestMovePoints();
   const cpu = state.cpuColor;
   const board = state.board;
   const order = [3, 1, 5, 2, 4, 0, 6]; // prefer center
@@ -794,8 +809,45 @@ function cpuBestMove() {
   return bestCol;
 }
 
+// Points-mode CPU: prefer a move that (1) scores for us, (2) doesn't
+// hand the opponent their winning points, (3) maximizes our net points.
+function scoredClone(board, scoredLines) {
+  const sc = {};
+  for (const color of [1, 2])
+    sc[color] = scoredLines[color].map(p => ({ cells: p.cells.map(x => x.slice()), len: p.len }));
+  return { board, scores: { 1: 0, 2: 0 }, scoredLines: sc };
+}
+
+function cpuBestMovePoints() {
+  const cpu = state.cpuColor, opp = 3 - cpu;
+  const order = [3, 1, 5, 2, 4, 0, 6];
+  let bestCol = order[0], bestScore = -Infinity;
+  for (const c of order) {
+    const st2 = scoredClone(state.board, state.scoredLines);
+    st2.board = simulateDrop(state.board, c, cpu);
+    const cpuGain = scoreNewLines(st2).gained[cpu];
+    const cpuTotal = state.scores[cpu] + cpuGain;
+    const weWin = cpuTotal >= POINTS_TARGET;
+    // Opponent's best single reply after our move (on the updated board).
+    let oppBest = 0, oppCanWin = false;
+    for (let c2 = 0; c2 < COLS; c2++) {
+      const st3 = scoredClone(st2.board, st2.scoredLines);
+      st3.board = simulateDrop(st2.board, c2, opp);
+      const og = scoreNewLines(st3).gained[opp];
+      oppBest = Math.max(oppBest, og);
+      if (state.scores[opp] + og >= POINTS_TARGET) oppCanWin = true;
+    }
+    let s = cpuGain * 10 - oppBest * 8 + cpuTotal * 0.5;
+    if (oppCanWin) s -= 20000;          // avoid moves that let them hit 10
+    if (weWin) s += 100000;             // winning move dominates
+    s += Math.random();
+    if (s > bestScore) { bestScore = s; bestCol = c; }
+  }
+  return bestCol;
+}
+
 function maybeCpuMove() {
-  if (state.mode !== 'cpu' || state.over || state.turn !== state.cpuColor) return;
+  if (state.opp !== 'cpu' || state.over || state.turn !== state.cpuColor) return;
   setTimeout(() => {
     if (state.over) return;
     dropPiece(cpuBestMove(), false);
@@ -806,7 +858,7 @@ function maybeCpuMove() {
 // Input
 // ------------------------------------------------------------------
 canvas.addEventListener('click', (e) => {
-  if (state.mode === 'cpu' && state.turn === state.cpuColor) { Sound.invalid(); return; }
+  if (state.opp === 'cpu' && state.turn === state.cpuColor) { Sound.invalid(); return; }
   const rect = canvas.getBoundingClientRect();
   const x = (e.clientX - rect.left) * (W / rect.width);
   if (x < PAD || x > W - PAD) return;
@@ -835,18 +887,26 @@ window.addEventListener('keydown', (e) => {
 // UI
 // ------------------------------------------------------------------
 function syncModeUI() {
-  const isCpu = state.mode === 'cpu';
-  const isPoints = state.mode === 'points';
-  document.getElementById('starterBar').hidden = !isCpu;
-  document.getElementById('scores').hidden = !isPoints;
+  document.getElementById('starterBar').hidden = state.opp !== 'cpu';
+  document.getElementById('scores').hidden = state.rules !== 'points';
 }
 
-document.getElementById('modeSelect').addEventListener('click', (e) => {
+document.getElementById('oppSelect').addEventListener('click', (e) => {
   const btn = e.target.closest('button');
   if (!btn) return;
-  document.querySelectorAll('#modeSelect button').forEach(b => b.classList.remove('active'));
+  document.querySelectorAll('#oppSelect button').forEach(b => b.classList.remove('active'));
   btn.classList.add('active');
-  state.mode = btn.dataset.mode;
+  state.opp = btn.dataset.opp;
+  syncModeUI();
+  resetGame();
+});
+
+document.getElementById('rulesSelect').addEventListener('click', (e) => {
+  const btn = e.target.closest('button');
+  if (!btn) return;
+  document.querySelectorAll('#rulesSelect button').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  state.rules = btn.dataset.rules;
   syncModeUI();
   resetGame();
 });
