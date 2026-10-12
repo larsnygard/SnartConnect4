@@ -66,6 +66,24 @@ h1 {
   font-size: 0.9rem; transition: all .15s;
 }
 .mode-select button.active { background: linear-gradient(135deg, #0ea5e9, #6366f1); color: #fff; font-weight: 700; }
+.mode-select[hidden] { display: none !important; }
+
+.scores {
+  display: flex; gap: 14px; align-items: center; justify-content: center;
+  margin: 2px 0 4px; font-weight: 700; font-size: 1.05rem;
+}
+.scores[hidden] { display: none !important; }
+.scores .score { display: inline-flex; gap: 6px; align-items: center; }
+.scores .dot { display: inline-block; width: 0.8em; height: 0.8em; border-radius: 50%; }
+.scores .p1 .dot { background: var(--p1); }
+.scores .p2 .dot { background: var(--p2); }
+.scores .target { color: #64748b; font-size: 0.8rem; font-weight: 400; }
+#score1, #score2 { display: inline-block; min-width: 1.2em; text-align: center; }
+#score1.bump, #score2.bump { animation: scorebump .5s ease; }
+@keyframes scorebump {
+  0% { transform: scale(1.7); color: #fff; }
+  100% { transform: scale(1); }
+}
 
 .board-wrap { position: relative; margin: 8px auto 16px; }
 canvas#board { display: block; border-radius: 16px; touch-action: manipulation; }
@@ -91,16 +109,30 @@ footer { color: #64748b; font-size: 0.8rem; margin-top: 4px; padding-bottom: 18p
 
 <header>
   <h1>SnartConnect</h1>
-  <div class="subtitle">Connect 4 — first to line up four wins. Full columns push out the bottom.</div>
+  <div class="subtitle">Connect 4 — first to line up four wins. Full columns push out the bottom. Or play Points: connect 4/5/6/7 = 1/2/5/10, first to 10 wins.</div>
 </header>
 
 <div class="topbar">
   <div class="mode-select" id="modeSelect">
     <button data-mode="pvp" class="active">2 Players</button>
     <button data-mode="cpu">vs CPU</button>
+    <button data-mode="points">Points</button>
   </div>
   <button class="btn" id="soundBtn" title="Sound on/off">🔊 Sound: On</button>
   <button class="btn primary" id="newGameBtn">New Game</button>
+</div>
+
+<div class="topbar" id="starterBar" hidden>
+  <div class="mode-select" id="starterSelect">
+    <button data-starter="player" class="active">You start</button>
+    <button data-starter="cpu">CPU starts</button>
+  </div>
+</div>
+
+<div class="scores" id="scores" hidden>
+  <span class="score p1"><span class="dot"></span>P1 <span id="score1">0</span></span>
+  <span class="target">first to 10 wins</span>
+  <span class="score p2">P2 <span id="score2">0</span><span class="dot"></span></span>
 </div>
 
 <div class="board-wrap">
@@ -115,7 +147,7 @@ footer { color: #64748b; font-size: 0.8rem; margin-top: 4px; padding-bottom: 18p
 <div class="status" id="status"></div>
 <div class="hint">Click a column (or press keys 1–7) to drop a piece. When a column is full the whole column shifts down one place, and the bottom piece falls out and is eliminated.</div>
 
-<footer>SnartConnect • 7×6 • win by 4 in a row (horizontal / vertical / diagonal)</footer>
+<footer>SnartConnect • 7×6 • classic: 4 in a row • points: 4/5/6/7 = 1/2/5/10, first to 10</footer>
 
 <script>
 (() => {
@@ -180,6 +212,7 @@ const Sound = (() => {
     win:   () => { [523.25, 659.25, 783.99, 1046.5].forEach((f, i) => blip(f, .18, 'triangle', .45, i*.12)); },
     draw:  () => { blip(300, .25, 'sawtooth', .3); blip(250, .3, 'sawtooth', .3, .25); },
     out:   () => { blip(160, .2, 'sine', .4); blip(100, .25, 'sine', .4, .1); },
+    score: () => { blip(660, .1, 'triangle', .4); blip(880, .16, 'triangle', .4, .1); },
   };
 })();
 
@@ -189,28 +222,40 @@ const Sound = (() => {
 const state = {
   board: [],       // board[row][col] = 0 empty, 1 p1 (yellow), 2 p2 (red). row 0 = BOTTOM.
   turn: 1,
-  mode: 'pvp',     // 'pvp' | 'cpu'
+  mode: 'pvp',     // 'pvp' | 'cpu' | 'points'
+  starter: 'player', // cpu mode only: who moves first ('player' | 'cpu')
   cpuColor: 2,    // CPU always plays red
   over: false,
   winLine: null,
   animating: false,
   hoverCol: -1,
   shiftCol: -1,
+  scores: { 1: 0, 2: 0 }, // points mode
+  scoredLines: { 1: [], 2: [] }, // points mode: already-scored lines as key arrays
+  lastLine: null,   // points mode: last scored run { color, cells, len }
 };
+const POINTS_TARGET = 10;
+const POINTS_BY_LEN = { 4: 1, 5: 2, 6: 5, 7: 10 };
+function pointsForLen(len) { return len >= 7 ? 10 : (POINTS_BY_LEN[len] || 0); }
 
 function emptyBoard() { return Array.from({length: ROWS}, () => Array(COLS).fill(0)); }
 
 function resetGame() {
   state.board = emptyBoard();
-  state.turn = 1;
+  state.turn = (state.mode === 'cpu' && state.starter === 'cpu') ? state.cpuColor : 1;
   state.over = false;
   state.winLine = null;
   state.animating = false;
   state.hoverCol = -1;
   state.shiftCol = -1;
+  state.scores = { 1: 0, 2: 0 };
+  state.scoredLines = { 1: [], 2: [] };
+  state.lastLine = null;
   hideOverlay();
+  updateScores();
   updateStatus();
   render();
+  maybeCpuMove();
 }
 
 // ------------------------------------------------------------------
@@ -432,19 +477,37 @@ const colorName = p => p === 1 ? 'Yellow' : 'Red';
 
 function updateStatus() {
   let txt;
-  if (state.over) {
-    const wl = state.winLine;
-    if (!wl) txt = 'Board is full — draw';
-    else if (wl.type === 'draw') txt = 'Draw — multiple lines at once!';
-    else txt = wl.reason === 'longest'
-      ? `${colorName(wl.color)} wins! (${wl.longest} in a row)`
-      : `${colorName(wl.color)} wins!`;
+  if (state.mode === 'points') {
+    if (state.over) {
+      const wl = state.winLine;
+      if (wl && wl.type === 'win') txt = `${colorName(wl.color)} wins!`;
+      else txt = 'Game over';
+    } else {
+      txt = `${colorName(state.turn)} to move`;
+      if (state.mode === 'cpu' && state.turn === state.cpuColor) txt += ' — CPU thinking…';
+    }
   } else {
-    txt = `${colorName(state.turn)} to move`;
-    if (state.mode === 'cpu' && state.turn === state.cpuColor) txt += ' — CPU thinking…';
+    if (state.over) {
+      const wl = state.winLine;
+      if (!wl) txt = 'Board is full — draw';
+      else if (wl.type === 'draw') txt = 'Draw — multiple lines at once!';
+      else txt = wl.reason === 'longest'
+        ? `${colorName(wl.color)} wins! (${wl.longest} in a row)`
+        : `${colorName(wl.color)} wins!`;
+    } else {
+      txt = `${colorName(state.turn)} to move`;
+      if (state.mode === 'cpu' && state.turn === state.cpuColor) txt += ' — CPU thinking…';
+    }
   }
   statusEl.innerHTML =
     `<span style="color:${state.turn === 1 ? 'var(--p1)' : 'var(--p2)'}">●</span> ${txt}`;
+}
+
+function updateScores() {
+  const s1 = document.getElementById('score1');
+  const s2 = document.getElementById('score2');
+  s1.textContent = state.scores[1];
+  s2.textContent = state.scores[2];
 }
 
 function hideOverlay() { document.getElementById('overlay').classList.remove('show'); }
@@ -480,8 +543,9 @@ function dropPiece(col, byHuman) {
 }
 
 function afterDrop(player) {
-  const res = evaluateAfterMove(state.board);
   state.animating = false;
+  if (state.mode === 'points') { afterDropPoints(player); return; }
+  const res = evaluateAfterMove(state.board);
   render();
 
   if (res.type === 'win') {
@@ -506,6 +570,72 @@ function afterDrop(player) {
     return;
   }
 
+  state.turn = 3 - player;
+  Sound.turn();
+  updateStatus();
+  render();
+  maybeCpuMove();
+}
+
+// ------------------------------------------------------------------
+// Points mode — connect 4/5/6/7 = 1/2/5/10 points, first to 10 wins.
+// A line scores its table value; when a scored line is extended the
+// difference is added (so a 5-line is worth 2 total, not 1+2).
+// A move can also extend the opponent's line (a column shift), and
+// both players can pass the target the same turn — then the higher
+// score wins, and if it's equal the game continues.
+// ------------------------------------------------------------------
+function scoreNewLines() {
+  const gained = { 1: 0, 2: 0 };
+  let highlight = null;
+  for (const color of [1, 2]) {
+    const runs = allRuns(state.board).filter(x => x.v === color && x.len >= 4);
+    for (const run of runs) {
+      const keySet = new Set(run.cells.map(([r, c]) => r + ',' + c));
+      let prevLen = 0, prevIdx = -1;
+      state.scoredLines[color].forEach((p, i) => {
+        if (p.len > prevLen && p.cells.every(([r, c]) => keySet.has(r + ',' + c))) {
+          prevLen = p.len; prevIdx = i;
+        }
+      });
+      const delta = pointsForLen(run.len) - pointsForLen(prevLen);
+      if (delta <= 0) continue;
+      if (prevIdx >= 0) state.scoredLines[color].splice(prevIdx, 1);
+      state.scoredLines[color].push({ cells: run.cells, len: run.len });
+      gained[color] += delta;
+      if (!highlight || delta > highlight.delta)
+        highlight = { color, cells: run.cells, len: run.len, delta };
+    }
+  }
+  state.scores[1] += gained[1];
+  state.scores[2] += gained[2];
+  return { gained, highlight };
+}
+
+function checkPointsWin() {
+  const a = state.scores[1], b = state.scores[2];
+  if (a >= POINTS_TARGET && b >= POINTS_TARGET) return a > b ? 1 : b > a ? 2 : 0;
+  if (a >= POINTS_TARGET) return 1;
+  if (b >= POINTS_TARGET) return 2;
+  return 0;
+}
+
+function afterDropPoints(player) {
+  const { gained, highlight } = scoreNewLines();
+  state.winLine = highlight
+    ? { type: 'score', color: highlight.color, cells: highlight.cells }
+    : null;
+  render();
+  if (highlight || gained[1] || gained[2]) { Sound.score(); updateScores(); }
+  const winner = checkPointsWin();
+  if (winner) {
+    state.over = true;
+    updateStatus();
+    Sound.win();
+    const sub = `First to ${POINTS_TARGET} points — final ${state.scores[1]} : ${state.scores[2]}`;
+    setTimeout(() => showOverlay(`${colorName(winner)} wins!`, sub), 900);
+    return;
+  }
   state.turn = 3 - player;
   Sound.turn();
   updateStatus();
@@ -704,12 +834,29 @@ window.addEventListener('keydown', (e) => {
 // ------------------------------------------------------------------
 // UI
 // ------------------------------------------------------------------
+function syncModeUI() {
+  const isCpu = state.mode === 'cpu';
+  const isPoints = state.mode === 'points';
+  document.getElementById('starterBar').hidden = !isCpu;
+  document.getElementById('scores').hidden = !isPoints;
+}
+
 document.getElementById('modeSelect').addEventListener('click', (e) => {
   const btn = e.target.closest('button');
   if (!btn) return;
   document.querySelectorAll('#modeSelect button').forEach(b => b.classList.remove('active'));
   btn.classList.add('active');
   state.mode = btn.dataset.mode;
+  syncModeUI();
+  resetGame();
+});
+
+document.getElementById('starterSelect').addEventListener('click', (e) => {
+  const btn = e.target.closest('button');
+  if (!btn) return;
+  document.querySelectorAll('#starterSelect button').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  state.starter = btn.dataset.starter;
   resetGame();
 });
 document.getElementById('newGameBtn').addEventListener('click', resetGame);
