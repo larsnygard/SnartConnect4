@@ -11,4 +11,6 @@ Connect 4 — first to line up four wins. Full columns push out the bottom.
 
 ## License
 
-Licensed under the GNU Affero General Public License v3.0-or-later — see [LICENSE](LICENSE).
+Copyright (C) 2026 Lars Christian Nygård (Snart apps).
+
+This project is licensed under the GNU Affero General Public License v3.0-or-later — see [LICENSE](LICENSE).
